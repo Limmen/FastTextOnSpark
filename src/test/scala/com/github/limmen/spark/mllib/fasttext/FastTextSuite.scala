@@ -1,4 +1,4 @@
-package com.github.limmen.spark.fasttext
+package com.github.limmen.spark.mllib.fasttext
 
 import com.github.fommil.netlib.BLAS.{ getInstance => blas }
 import org.scalatest.PrivateMethodTester._
