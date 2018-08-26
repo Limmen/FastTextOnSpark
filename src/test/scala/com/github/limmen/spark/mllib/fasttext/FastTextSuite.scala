@@ -233,13 +233,30 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
     assert(norm2(1) == 2.242219f)
   }
 
+  test("normalizeVecs") {
+    val testVector1 = Array(0.6f, -0.2f, 0.9f, 1.2f, -2.4f)
+    val vocabSize1 = 1
+    val vectorSize1 = 5
+    val bucket1 = 0
+    val norm1 = FastTextModel.wordVecNorms(testVector1, vocabSize1, vectorSize1, bucket1)
+    val normalizedVector1 = FastTextModel.normalizeVecs(testVector1, norm1, vocabSize1, vectorSize1, bucket1)
+    assert(normalizedVector1.length == testVector1.length)
+    assert(normalizedVector1.sameElements(Array(0.20689654f, -0.06896552f, 0.3103448f, 0.4137931f, -0.8275862f)))
+    val testVector2 = Array(0.6f, -0.2f, 0.9f, 1.2f, -2.4f, 1.39f, -1.56f, 0.11f, 0.165f, -0.789f)
+    val vocabSize2 = 2
+    val norm2 = FastTextModel.wordVecNorms(testVector2, vocabSize2, vectorSize1, bucket1)
+    val normalizedVector2 = FastTextModel.normalizeVecs(testVector2, norm2, vocabSize2, vectorSize1, bucket1)
+    normalizedVector2.foreach(println)
+    assert(normalizedVector2.length == testVector2.length)
+    assert(normalizedVector2.sameElements(Array(
+      0.20689654f, -0.06896552f, 0.3103448f, 0.4137931f, -0.8275862f,
+      0.6199216f, -0.6957393f, 0.049058545f, 0.07358782f, -0.35188356f)))
+  }
+
   //  test("getVectors") {
   //    ???
   //  }
   //
-  //  test("normalizeVecs") {
-  //    ???
-  //  }
   //
   //  test("transform") {
   //    ???
