@@ -373,7 +373,7 @@ class FastText extends Serializable {
       while (j < w.size && n <= maxn) {
         ngram = ngram + w(j)
         if (n >= minn && !(n == 1 && (i == 0 || j == w.size))) {
-          val h = (hash(ngram) mod bucket).intValue
+          val h = (FastText.hash(ngram) mod bucket).intValue
           ngrams = ngrams :+ (vocabSize + h)
         }
         j += 1
@@ -382,21 +382,6 @@ class FastText extends Serializable {
       i += 1
     }
     ngrams
-  }
-
-  /**
-   * A variant of the Fowler-Noll-Vo hashing function (FNV-1a)
-   *
-   * @param str the plaintext string
-   * @return the hash
-   */
-  private def hash(str: String): BigInt = {
-    var h = BigInt("2166136261")
-    str.foreach(c => {
-      h = h ^ c.toByte
-      h = h * 16777619
-    })
-    h
   }
 
   /**
@@ -885,6 +870,27 @@ class FastText extends Serializable {
 }
 
 /**
+ * Companion object for the FastText class with static methods
+ */
+object FastText {
+
+  /**
+   * A variant of the Fowler-Noll-Vo hashing function (FNV-1a)
+   *
+   * @param str the plaintext string
+   * @return the hash
+   */
+  def hash(str: String): BigInt = {
+    var h = BigInt("2166136261")
+    str.foreach(c => {
+      h = h ^ c.toByte
+      h = h * 16777619
+    })
+    h
+  }
+}
+
+/**
  * Resulting Model from FastText training
  *
  * @param wordIndex the index of word to vocabIndex
@@ -897,6 +903,10 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
   // vectorSize: Dimension of each word's vector.
   private val vectorSize = wordVectors.length / (numWords + bucket)
   private val vocabSize = vocab.length
+
+  def this(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int) = {
+    this(FastTextModel.buildWordIndex(wordsModel), FastTextModel.buildWordVectors(wordsModel, subwordsModel, vocab, bucket), vocab, bucket)
+  }
 
   /**
    * Returns a map of words to their vector representations.
@@ -1017,6 +1027,7 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
 
   /**
    * Find synonyms of a word; do not include the word itself in results.
+   *
    * @param word a word
    * @param num number of synonyms to find
    * @return array of (word, cosineSimilarity)
@@ -1103,6 +1114,36 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
       .take(num)
       .map { case (word, score) => (word, score.toDouble) }
       .toArray
+  }
+}
+
+/**
+ * Companion object for FastTextModel with static methods.
+ */
+object FastTextModel {
+
+  def buildWordIndex(model: Map[String, Array[Float]]): Map[String, Int] = {
+    model.keys.zipWithIndex.toMap
+  }
+
+  def buildWordVectors(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int): Array[Float] = {
+    require(wordsModel.nonEmpty, "FastTextMap should be non-empty")
+    val vocabSize = vocab.size
+    val vectorSize = wordsModel.head._2.length
+    val wordList = wordsModel.keys.toArray
+    //A flattened vector of all word and subword vectors initialization
+    val wordVectors = Array.fill[Float]((vocabSize + bucket) * vectorSize)((Random.nextFloat() - 0.5f) / vectorSize)
+    var i = 0
+    //Copy in the word vectors in the flattened vectors array
+    while (i < vocabSize) {
+      Array.copy(wordsModel(wordList(i)), 0, wordVectors, i * vectorSize, vectorSize)
+      i += 1
+    }
+    val subWordsHashModel = subwordsModel.map { case (ngram, vector) => (vocabSize + (FastText.hash(ngram) mod bucket).intValue, vector) }
+    subWordsHashModel.foreach {
+      case (hash, vector) => Array.copy(vector, 0, wordVectors, hash * vectorSize, vectorSize)
+    }
+    wordVectors
   }
 }
 
