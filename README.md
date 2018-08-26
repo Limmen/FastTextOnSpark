@@ -62,6 +62,7 @@ The dataset were scraped from English wikipedia 2018-03-01 using the scripts pro
 
 ## Features to Implement In Future Releases
 
+- DataFrame API (ml version instead of mllib)
 - CBOW model
 - Negative sampling
 - Regular softmax

@@ -904,6 +904,14 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
   private val vectorSize = wordVectors.length / (numWords + bucket)
   private val vocabSize = vocab.length
 
+  /**
+    * Alternative constructor to create a model from given map with strings to vectors, mostly for testing purposesg
+    *
+    * @param wordsModel a map of (word, WordVector)
+    * @param subwordsModel a map of (subword, subwordVector)
+    * @param vocab the vocabulary words with their counts, huffman codes etc
+    * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+    */
   def this(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int) = {
     this(FastTextModel.buildWordIndex(wordsModel), FastTextModel.buildWordVectors(wordsModel, subwordsModel, vocab, bucket), vocab, bucket)
   }
@@ -1122,10 +1130,25 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
  */
 object FastTextModel {
 
-  def buildWordIndex(model: Map[String, Array[Float]]): Map[String, Int] = {
-    model.keys.zipWithIndex.toMap
+  /**
+    * Builds an index (word --> index) from a model of (word --> wordVector)
+    *
+    * @param wordsModel a map of of (word --> wordVector)
+    * @return a map of (word --> index)
+    */
+  def buildWordIndex(wordsModel: Map[String, Array[Float]]): Map[String, Int] = {
+    wordsModel.keys.zipWithIndex.toMap
   }
 
+  /**
+    * Builds a flattened array of word and subwords vectors from maps of (word --> vector) and (subword --> vector)
+    *
+    * @param wordsModel a map of of (word --> wordVector)
+    * @param subwordsModel a map of of (subword --> subwordVector)
+    * @param vocab the vocabulary words with their counts, huffman codes etc
+    * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+    * @return a flattened array of word and subword vectors
+    */
   def buildWordVectors(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int): Array[Float] = {
     require(wordsModel.nonEmpty, "FastTextMap should be non-empty")
     val vocabSize = vocab.size

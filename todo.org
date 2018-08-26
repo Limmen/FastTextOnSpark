@@ -6,3 +6,4 @@
 7. Setup a Jupyter notebook for parsing the trained vectors and doing plots etc.
 8. Publish to MavenCentral
 9. Publish as a spark package
+10. Remove logging
