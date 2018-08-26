@@ -905,13 +905,13 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
   private val vocabSize = vocab.length
 
   /**
-    * Alternative constructor to create a model from given map with strings to vectors, mostly for testing purposesg
-    *
-    * @param wordsModel a map of (word, WordVector)
-    * @param subwordsModel a map of (subword, subwordVector)
-    * @param vocab the vocabulary words with their counts, huffman codes etc
-    * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
-    */
+   * Alternative constructor to create a model from given map with strings to vectors, mostly for testing purposesg
+   *
+   * @param wordsModel a map of (word, WordVector)
+   * @param subwordsModel a map of (subword, subwordVector)
+   * @param vocab the vocabulary words with their counts, huffman codes etc
+   * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+   */
   def this(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int) = {
     this(FastTextModel.buildWordIndex(wordsModel), FastTextModel.buildWordVectors(wordsModel, subwordsModel, vocab, bucket), vocab, bucket)
   }
@@ -925,8 +925,8 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
    */
   def getVectors(norm: Boolean = false): Map[String, Array[Float]] = {
     if (norm) {
-      val norms = wordVecNorms(wordVectors)
-      val normalized = normalizeVecs(wordVectors, norms)
+      val norms = FastTextModel.wordVecNorms(wordVectors, vocabSize, vectorSize, bucket)
+      val normalized = FastTextModel.normalizeVecs(wordVectors, norms, vocabSize, vectorSize, bucket)
       wordIndex.map {
         case (word, ind) =>
           averageSubWords(word, ind, normalized)
@@ -982,40 +982,6 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
       w2vStringFormat.foreach((s) => writer.write(s + "\n"))
       writer.close()
     }
-  }
-
-  /**
-   * Computes the L2 norm of each vector
-   *
-   * @param wordVectors the wordvectors represented by a long array
-   * @return array with L2Norm for each word vector at its index
-   */
-  def wordVecNorms(wordVectors: Array[Float]): Array[Float] = {
-    val wordVecNorms = new Array[Float](vocabSize + bucket)
-    var i = 0
-    while (i < vocabSize + bucket) {
-      val vec = wordVectors.slice(i * vectorSize, i * vectorSize + vectorSize)
-      wordVecNorms(i) = blas.snrm2(vectorSize, vec, 1)
-      i += 1
-    }
-    wordVecNorms
-  }
-
-  /**
-   * Normalize vectors with the L2 norm
-   *
-   * @param rawWordVectors the wordvectors represented by a long array
-   * @param wordVecNorms an array with L2Norms for the word vectors
-   * @return array with normalized word vectors
-   */
-  def normalizeVecs(rawWordVectors: Array[Float], wordVecNorms: Array[Float]): Array[Float] = {
-    var i = 0
-    while (i < vocabSize + bucket) {
-      val l2scalar = (1.0f / wordVecNorms(i)).toFloat
-      blas.sscal(vectorSize, l2scalar, rawWordVectors, i * vectorSize, 1)
-      i += 1
-    }
-    rawWordVectors
   }
 
   /**
@@ -1085,7 +1051,7 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
     }
     blas.sgemv(
       "T", vectorSize, numWords, alpha, wordVectors, vectorSize, fVector, 1, beta, cosineVec, 1)
-    val norms = wordVecNorms(wordVectors)
+    val norms = FastTextModel.wordVecNorms(wordVectors, vocabSize, vectorSize, bucket)
     var i = 0
     while (i < numWords) {
       val norm = norms(i)
@@ -1131,24 +1097,24 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
 object FastTextModel {
 
   /**
-    * Builds an index (word --> index) from a model of (word --> wordVector)
-    *
-    * @param wordsModel a map of of (word --> wordVector)
-    * @return a map of (word --> index)
-    */
+   * Builds an index (word --> index) from a model of (word --> wordVector)
+   *
+   * @param wordsModel a map of of (word --> wordVector)
+   * @return a map of (word --> index)
+   */
   def buildWordIndex(wordsModel: Map[String, Array[Float]]): Map[String, Int] = {
     wordsModel.keys.zipWithIndex.toMap
   }
 
   /**
-    * Builds a flattened array of word and subwords vectors from maps of (word --> vector) and (subword --> vector)
-    *
-    * @param wordsModel a map of of (word --> wordVector)
-    * @param subwordsModel a map of of (subword --> subwordVector)
-    * @param vocab the vocabulary words with their counts, huffman codes etc
-    * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
-    * @return a flattened array of word and subword vectors
-    */
+   * Builds a flattened array of word and subwords vectors from maps of (word --> vector) and (subword --> vector)
+   *
+   * @param wordsModel a map of of (word --> wordVector)
+   * @param subwordsModel a map of of (subword --> subwordVector)
+   * @param vocab the vocabulary words with their counts, huffman codes etc
+   * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+   * @return a flattened array of word and subword vectors
+   */
   def buildWordVectors(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int): Array[Float] = {
     require(wordsModel.nonEmpty, "FastTextMap should be non-empty")
     val vocabSize = vocab.size
@@ -1167,6 +1133,46 @@ object FastTextModel {
       case (hash, vector) => Array.copy(vector, 0, wordVectors, hash * vectorSize, vectorSize)
     }
     wordVectors
+  }
+
+  /**
+   * Computes the L2 norm of each vector
+   *
+   * @param wordVectors the wordvectors represented by a long array
+   * @param vocabSize the size of the vocabulary of words
+   * @param vectorSize the vector dimension
+   * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+   * @return array with L2Norm for each word vector at its index
+   */
+  def wordVecNorms(wordVectors: Array[Float], vocabSize: Int, vectorSize: Int, bucket: Int): Array[Float] = {
+    val wordVecNorms = new Array[Float](vocabSize + bucket)
+    var i = 0
+    while (i < vocabSize + bucket) {
+      val vec = wordVectors.slice(i * vectorSize, i * vectorSize + vectorSize)
+      wordVecNorms(i) = blas.snrm2(vectorSize, vec, 1)
+      i += 1
+    }
+    wordVecNorms
+  }
+
+  /**
+   * Normalize vectors with the L2 norm
+   *
+   * @param rawWordVectors the wordvectors represented by a long array
+   * @param wordVecNorms an array with L2Norms for the word vectors
+   * @param vocabSize the size of the vocabulary of words
+   * @param vectorSize the vector dimension
+   * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+   * @return array with normalized word vectors
+   */
+  def normalizeVecs(rawWordVectors: Array[Float], wordVecNorms: Array[Float], vocabSize: Int, vectorSize: Int, bucket: Int): Array[Float] = {
+    var i = 0
+    while (i < vocabSize + bucket) {
+      val l2scalar = (1.0f / wordVecNorms(i)).toFloat
+      blas.sscal(vectorSize, l2scalar, rawWordVectors, i * vectorSize, 1)
+      i += 1
+    }
+    rawWordVectors
   }
 }
 

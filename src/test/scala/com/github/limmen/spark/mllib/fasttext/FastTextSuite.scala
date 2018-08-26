@@ -217,23 +217,35 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
     }
   }
 
-  test("getVectors") {
-    ???
-  }
-
-  test("normalizeVecs") {
-    ???
-  }
-
   test("wordVecNorms") {
-    ???
+    val testVector1 = Array(0.6f, -0.2f, 0.9f, 1.2f, -2.4f)
+    val vocabSize1 = 1
+    val vectorSize1 = 5
+    val bucket1 = 0
+    val norm1 = FastTextModel.wordVecNorms(testVector1, vocabSize1, vectorSize1, bucket1)
+    assert(norm1.length == 1)
+    assert(norm1(0) == 2.9f)
+    val testVector2 = Array(0.6f, -0.2f, 0.9f, 1.2f, -2.4f, 1.39f, -1.56f, 0.11f, 0.165f, -0.789f)
+    val vocabSize2 = 2
+    val norm2 = FastTextModel.wordVecNorms(testVector2, vocabSize2, vectorSize1, bucket1)
+    assert(norm2.length == 2)
+    assert(norm2(0) == 2.9f)
+    assert(norm2(1) == 2.242219f)
   }
 
-  test("transform") {
-    ???
-  }
-
-  test("window size") {
-    ???
-  }
+  //  test("getVectors") {
+  //    ???
+  //  }
+  //
+  //  test("normalizeVecs") {
+  //    ???
+  //  }
+  //
+  //  test("transform") {
+  //    ???
+  //  }
+  //
+  //  test("window size") {
+  //    ???
+  //  }
 }
