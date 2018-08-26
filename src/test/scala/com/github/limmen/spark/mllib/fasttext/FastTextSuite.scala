@@ -253,14 +253,25 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
       0.6199216f, -0.6957393f, 0.049058545f, 0.07358782f, -0.35188356f)))
   }
 
+  test("transform") {
+    val sentence = "china japan taiwan korea"
+    val localDoc = Seq(sentence, sentence)
+    val doc = spark.sparkContext.parallelize(localDoc).map(line => line.split(" ").toSeq)
+    val bucket = 1000
+    val vectorSize = 4
+    val vocab = new FastText().setVectorSize(vectorSize).setSeed(42L).setMinn(3).setMaxn(3).setBucket(bucket).setMinCount(1).fit(doc).vocab
+    val model = new FastTextModel(wordsModelTest, subwordsModelTest, vocab, bucket)
+    assert(model.transform("china").toArray.sameElements(wordsModelTest("china")))
+    assert(model.transform("japan").toArray.sameElements(wordsModelTest("japan")))
+    assert(model.transform("taiwan").toArray.sameElements(wordsModelTest("taiwan")))
+    assert(model.transform("korea").toArray.sameElements(wordsModelTest("korea")))
+  }
+
   //  test("getVectors") {
   //    ???
   //  }
   //
   //
-  //  test("transform") {
-  //    ???
-  //  }
   //
   //  test("window size") {
   //    ???
