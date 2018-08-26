@@ -13,15 +13,21 @@ import scala.util.Random
 
 /**
  * Entry in vocabulary
+ *
+ * @param word the word itself
+ * @param cn the word frequency
+ * @param point the path from Root to the word in the Huffman Tree, store every index of non-leaf node
+ * @param code the huffman code
+ * @param codeLen the length of the code
+ * @param subwords the n-grams/subwords of the word
  */
-private case class FTVocabWord(
-  var word: String, //The word itself
-  var cn: Int, //Word frequency
-  var point: Array[Int], //Path from Root to the word in the Huffman Tree, store every index of non-leaf node
-  var code: Array[Int], //Huffman code
-  var codeLen: Int, //Length of the code
-  var subwords: Array[Int] //N-grams/Subwords of word
-)
+case class FTVocabWord(
+  var word: String,
+  var cn: Int,
+  var point: Array[Int],
+  var code: Array[Int],
+  var codeLen: Int,
+  var subwords: Array[Int])
 
 /**
  * Implements the FastText algorithm for training word embeddings.
@@ -516,7 +522,7 @@ class FastText extends Serializable {
    * each sentence is expressed as an iterable collection of words
    * @return a FastTextModel
    */
-  def train[S <: Iterable[String]](dataset: RDD[S]): FastTextModel = {
+  def fit[S <: Iterable[String]](dataset: RDD[S]): FastTextModel = {
 
     //Learn the Vocabulary Frequencies and create placeholder for huffman codes
     learnVocab(dataset)
@@ -542,7 +548,7 @@ class FastText extends Serializable {
 
     try {
       //Call method containing the training logic
-      doTrain(dataset, sc, expTable, bcVocab, bcVocabHash)
+      doFit(dataset, sc, expTable, bcVocab, bcVocabHash)
     } finally {
       //Cleanup after training
       //Destroy broadcast variables, blocks until destroying is complete
@@ -562,7 +568,7 @@ class FastText extends Serializable {
    * @param bcVocab broadcast variable with the vocabulary containing words, huffman codes, etc
    * @param bcVocabHash broadcast variable with hashes/indexes of words in vocab
    */
-  private def doTrain[S <: Iterable[String]](
+  private def doFit[S <: Iterable[String]](
     dataset: RDD[S], sc: SparkContext,
     expTable: Broadcast[Array[Float]],
     bcVocab: Broadcast[Array[FTVocabWord]],
@@ -874,222 +880,229 @@ class FastText extends Serializable {
     val wordArray = vocab.map(_.word)
     val wordIndex = wordArray.zipWithIndex.toMap
     val wordVectors = syn0Global
-    new FastTextModel(wordIndex, wordVectors)
+    new FastTextModel(wordIndex, wordVectors, vocab, bucket)
+  }
+}
+
+/**
+ * Resulting Model from FastText training
+ *
+ * @param wordIndex the index of word to vocabIndex
+ * @param wordVectors a long array of the appended vectors
+ * @param vocab the vocabulary words with their counts, huffman codes etc
+ * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
+ */
+class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Float], val vocab: Array[FTVocabWord], val bucket: Int) {
+  private val numWords = wordIndex.size
+  // vectorSize: Dimension of each word's vector.
+  private val vectorSize = wordVectors.length / (numWords + bucket)
+  private val vocabSize = vocab.length
+
+  /**
+   * Returns a map of words to their vector representations.
+   * Normalized or un-normalized.
+   *
+   * @param norm a boolean flag whether to normalize the vectors
+   * @return map of (String, WordVector)
+   */
+  def getVectors(norm: Boolean = false): Map[String, Array[Float]] = {
+    if (norm) {
+      val norms = wordVecNorms(wordVectors)
+      val normalized = normalizeVecs(wordVectors, norms)
+      wordIndex.map {
+        case (word, ind) =>
+          averageSubWords(word, ind, normalized)
+      }
+    } else {
+      wordIndex.map {
+        case (word, ind) =>
+          averageSubWords(word, ind, wordVectors)
+      }
+    }
   }
 
   /**
-   * Resulting Model from FastText training
+   * A word is represented by the average of its n-gram vectors.
+   * This function computes the vector representation for a given word
+   *
+   * @param word the input word to compute vector for
+   * @param index the index of the input word
+   * @param wordVectors the raw word vectors, containing vectors of all words and ngrams
+   * @return (word, averagedWordVector)
    */
-  class FastTextModel(val wordIndex: Map[String, Int], val rawWordVectors: Array[Float]) {
+  def averageSubWords(word: String, index: Int, wordVectors: Array[Float]): (String, Array[Float]) = {
+    val w = vocab(index)
+    var wordvec = Array.fill[Float](vectorSize)(0f)
+    w.subwords.foreach(ngramHash => {
+      blas.saxpy(vectorSize, 1.0f, wordVectors, ngramHash * vectorSize, 1, wordvec, 0, 1)
+    })
+    if (w.subwords.size > 0) {
+      val scalar = (1.0f / w.subwords.length)
+      blas.sscal(vectorSize, scalar, wordvec, 1)
+    }
+    (word, wordvec)
+  }
 
-    val wordVectors = convertRawVectorsToWordVectors(rawWordVectors)
+  /**
+   * Save output to Word2Vec textual format for interoperability with for example gensim
+   *
+   * @param wordVectors map of words and their corresponding vectors
+   * @param outputPath the path to save the vectors
+   * @param sc the spark context
+   * @param parallel boolean flag indicating whether to save in parallelized format
+   */
+  def saveToWord2VecFormat(wordVectors: Map[String, Array[Float]], outputPath: String, sc: SparkContext, parallel: Boolean): Unit = {
+    val vocabSize = wordVectors.size
+    val dim = wordVectors.head._2.size
+    val header = vocabSize + " " + dim
+    val temp = wordVectors.toList.map((x) => x._1 + " " + x._2.map(v => "%f".formatLocal(java.util.Locale.US, v)).mkString(" "))
+    val w2vStringFormat = header :: temp
+    if (parallel)
+      sc.parallelize(w2vStringFormat).saveAsTextFile(outputPath)
+    else {
+      val writer = new BufferedWriter(new FileWriter(outputPath))
+      w2vStringFormat.foreach((s) => writer.write(s + "\n"))
+      writer.close()
+    }
+  }
 
-    /**
-     * Returns a map of words to their vector representations.
-     * Normalized or un-normalized.
-     *
-     * @param rawWordVectors word vectors in a long array that have not been normalized
-     * @return map of (String, WordVector)
-     */
-    def convertRawVectorsToWordVectors(rawWordVectors: Array[Float]): Map[String, Array[Float]] = {
-      if (norm) {
-        val norms = wordVecNorms(rawWordVectors)
-        val normalized = normalizeVecs(rawWordVectors, norms)
-        wordIndex.map {
-          case (word, ind) =>
-            averageSubWords(word, ind, normalized)
-        }
+  /**
+   * Computes the L2 norm of each vector
+   *
+   * @param wordVectors the wordvectors represented by a long array
+   * @return array with L2Norm for each word vector at its index
+   */
+  def wordVecNorms(wordVectors: Array[Float]): Array[Float] = {
+    val wordVecNorms = new Array[Float](vocabSize + bucket)
+    var i = 0
+    while (i < vocabSize + bucket) {
+      val vec = wordVectors.slice(i * vectorSize, i * vectorSize + vectorSize)
+      wordVecNorms(i) = blas.snrm2(vectorSize, vec, 1)
+      i += 1
+    }
+    wordVecNorms
+  }
+
+  /**
+   * Normalize vectors with the L2 norm
+   *
+   * @param rawWordVectors the wordvectors represented by a long array
+   * @param wordVecNorms an array with L2Norms for the word vectors
+   * @return array with normalized word vectors
+   */
+  def normalizeVecs(rawWordVectors: Array[Float], wordVecNorms: Array[Float]): Array[Float] = {
+    var i = 0
+    while (i < vocabSize + bucket) {
+      val l2scalar = (1.0f / wordVecNorms(i)).toFloat
+      blas.sscal(vectorSize, l2scalar, rawWordVectors, i * vectorSize, 1)
+      i += 1
+    }
+    rawWordVectors
+  }
+
+  /**
+   * Transforms a word to its vector representation
+   * @param word a word
+   * @return vector representation of word
+   */
+  def transform(word: String): Vector = {
+    wordIndex.get(word) match {
+      case Some(ind) =>
+        val vec = wordVectors.slice(ind * vectorSize, ind * vectorSize + vectorSize)
+        Vectors.dense(vec.map(_.toDouble))
+      case None =>
+        throw new IllegalStateException(s"$word not in vocabulary")
+    }
+  }
+
+  /**
+   * Find synonyms of a word; do not include the word itself in results.
+   * @param word a word
+   * @param num number of synonyms to find
+   * @return array of (word, cosineSimilarity)
+   */
+  def findSynonyms(word: String, num: Int): Array[(String, Double)] = {
+    val vector = transform(word)
+    findSynonyms(vector, num, Some(word))
+  }
+
+  /**
+   * Find synonyms of the vector representation of a word, possibly
+   * including any words in the model vocabulary whose vector respresentation
+   * is the supplied vector.
+   *
+   * @param vector vector representation of a word
+   * @param num number of synonyms to find
+   * @return array of (word, cosineSimilarity)
+   */
+  def findSynonyms(vector: Vector, num: Int): Array[(String, Double)] = {
+    findSynonyms(vector, num, None)
+  }
+
+  /**
+   * Find synonyms of the vector representation of a word, rejecting
+   * words identical to the value of wordOpt, if one is supplied.
+   * Implementation taken from Spark's Word2Vec model: https://github.com/apache/spark/blob/c17a8ff52377871ab4ff96b648ebaf4112f0b5be/mllib/src/main/scala/org/apache/spark/mllib/feature/Word2Vec.scala
+   *
+   * @param vector vector representation of a word
+   * @param num number of synonyms to find
+   * @param wordOpt optionally, a word to reject from the results list
+   * @return array of (word, cosineSimilarity)
+   */
+  def findSynonyms(
+    vector: Vector,
+    num: Int,
+    wordOpt: Option[String]): Array[(String, Double)] = {
+    require(num > 0, "Number of similar words should > 0")
+    val numWords = wordIndex.size
+    val fVector = vector.toArray.map(_.toFloat)
+    val cosineVec = new Array[Float](numWords)
+    val alpha: Float = 1
+    val beta: Float = 0
+    // Normalize input vector before blas.sgemv to avoid Inf value
+    val vecNorm = blas.snrm2(vectorSize, fVector, 1)
+    if (vecNorm != 0.0f) {
+      blas.sscal(vectorSize, 1 / vecNorm, fVector, 0, 1)
+    }
+    blas.sgemv(
+      "T", vectorSize, numWords, alpha, wordVectors, vectorSize, fVector, 1, beta, cosineVec, 1)
+    val norms = wordVecNorms(wordVectors)
+    var i = 0
+    while (i < numWords) {
+      val norm = norms(i)
+      if (norm == 0.0f) {
+        cosineVec(i) = 0.0f
       } else {
-        wordIndex.map {
-          case (word, ind) =>
-            averageSubWords(word, ind, rawWordVectors)
-        }
+        cosineVec(i) /= norm
       }
+      i += 1
     }
 
-    /**
-     * A word is represented by the average of its n-gram vectors.
-     * This function computes the vector representation for a given word
-     *
-     * @param word the input word to compute vector for
-     * @param index the index of the input word
-     * @param rawWordvectors the raw word vectors, containing vectors of all words and ngrams
-     * @return (word, averagedWordVector)
-     */
-    def averageSubWords(word: String, index: Int, rawWordVectors: Array[Float]): (String, Array[Float]) = {
-      val w = vocab(index)
-      var wordvec = Array.fill[Float](vectorSize)(0f)
-      w.subwords.foreach(ngramHash => {
-        blas.saxpy(vectorSize, 1.0f, rawWordVectors, ngramHash * vectorSize, 1, wordvec, 0, 1)
-      })
-      if (w.subwords.size > 0) {
-        val scalar = (1.0f / w.subwords.length)
-        blas.sscal(vectorSize, scalar, wordvec, 1)
-      }
-      (word, wordvec)
+    val pq = new BoundedPriorityQueue[(String, Float)](num + 1)(Ordering.by(_._2))
+
+    // wordList: Ordered list of words obtained from wordIndex.
+    val wordList: Array[String] = {
+      val (wl, _) = wordIndex.toSeq.sortBy(_._2).unzip
+      wl.toArray
     }
 
-    /**
-     * Save output to Word2Vec textual format for interoperability with for example gensim
-     *
-     * @param wordVectors map of words and their corresponding vectors
-     * @param outputPath the path to save the vectors
-     * @param sc the spark context
-     * @param parallel boolean flag indicating whether to save in parallelized format
-     */
-    def saveToWord2VecFormat(wordVectors: Map[String, Array[Float]], outputPath: String, sc: SparkContext, parallel: Boolean): Unit = {
-      val vocabSize = wordVectors.size
-      val dim = wordVectors.head._2.size
-      val header = vocabSize + " " + dim
-      val temp = wordVectors.toList.map((x) => x._1 + " " + x._2.map(v => "%f".formatLocal(java.util.Locale.US, v)).mkString(" "))
-      val w2vStringFormat = header :: temp
-      if (parallel)
-        sc.parallelize(w2vStringFormat).saveAsTextFile(outputPath)
-      else {
-        val writer = new BufferedWriter(new FileWriter(outputPath))
-        w2vStringFormat.foreach((s) => writer.write(s + "\n"))
-        writer.close()
-      }
+    var j = 0
+    while (j < numWords) {
+      pq += Tuple2(wordList(j), cosineVec(j))
+      j += 1
     }
 
-    /**
-     * Computes the L2 norm of each vector
-     *
-     * @param rawWordVectors the wordvectors represented by a long array
-     * @return array with L2Norm for each word vector at its index
-     */
-    def wordVecNorms(rawWordVectors: Array[Float]): Array[Float] = {
-      val wordVecNorms = new Array[Float](vocabSize + bucket)
-      var i = 0
-      while (i < vocabSize + bucket) {
-        val vec = rawWordVectors.slice(i * vectorSize, i * vectorSize + vectorSize)
-        wordVecNorms(i) = blas.snrm2(vectorSize, vec, 1)
-        i += 1
-      }
-      wordVecNorms
+    val scored = pq.toSeq.sortBy(-_._2)
+
+    val filtered = wordOpt match {
+      case Some(w) => scored.filter(tup => w != tup._1)
+      case None => scored
     }
 
-    /**
-     * Normalize vectors with the L2 norm
-     *
-     * @param rawWordVectors the wordvectors represented by a long array
-     * @param wordVecNorms an array with L2Norms for the word vectors
-     * @return array with normalized word vectors
-     */
-    def normalizeVecs(rawWordVectors: Array[Float], wordVecNorms: Array[Float]): Array[Float] = {
-      var i = 0
-      while (i < vocabSize + bucket) {
-        val l2scalar = (1.0f / wordVecNorms(i)).toFloat
-        blas.sscal(vectorSize, l2scalar, rawWordVectors, i * vectorSize, 1)
-        i += 1
-      }
-      rawWordVectors
-    }
-
-    /**
-     * Transforms a word to its vector representation
-     * @param word a word
-     * @return vector representation of word
-     */
-    def transform(word: String): Vector = {
-      wordIndex.get(word) match {
-        case Some(ind) =>
-          val vec = rawWordVectors.slice(ind * vectorSize, ind * vectorSize + vectorSize)
-          Vectors.dense(vec.map(_.toDouble))
-        case None =>
-          throw new IllegalStateException(s"$word not in vocabulary")
-      }
-    }
-
-    /**
-     * Find synonyms of a word; do not include the word itself in results.
-     * @param word a word
-     * @param num number of synonyms to find
-     * @return array of (word, cosineSimilarity)
-     */
-    def findSynonyms(word: String, num: Int): Array[(String, Double)] = {
-      val vector = transform(word)
-      findSynonyms(vector, num, Some(word))
-    }
-
-    /**
-     * Find synonyms of the vector representation of a word, possibly
-     * including any words in the model vocabulary whose vector respresentation
-     * is the supplied vector.
-     *
-     * @param vector vector representation of a word
-     * @param num number of synonyms to find
-     * @return array of (word, cosineSimilarity)
-     */
-    def findSynonyms(vector: Vector, num: Int): Array[(String, Double)] = {
-      findSynonyms(vector, num, None)
-    }
-
-    /**
-     * Find synonyms of the vector representation of a word, rejecting
-     * words identical to the value of wordOpt, if one is supplied.
-     * Implementation taken from Spark's Word2Vec model: https://github.com/apache/spark/blob/c17a8ff52377871ab4ff96b648ebaf4112f0b5be/mllib/src/main/scala/org/apache/spark/mllib/feature/Word2Vec.scala
-     *
-     * @param vector vector representation of a word
-     * @param num number of synonyms to find
-     * @param wordOpt optionally, a word to reject from the results list
-     * @return array of (word, cosineSimilarity)
-     */
-    def findSynonyms(
-      vector: Vector,
-      num: Int,
-      wordOpt: Option[String]): Array[(String, Double)] = {
-      require(num > 0, "Number of similar words should > 0")
-      val numWords = wordIndex.size
-      val fVector = vector.toArray.map(_.toFloat)
-      val cosineVec = new Array[Float](numWords)
-      val alpha: Float = 1
-      val beta: Float = 0
-      // Normalize input vector before blas.sgemv to avoid Inf value
-      val vecNorm = blas.snrm2(vectorSize, fVector, 1)
-      if (vecNorm != 0.0f) {
-        blas.sscal(vectorSize, 1 / vecNorm, fVector, 0, 1)
-      }
-      blas.sgemv(
-        "T", vectorSize, numWords, alpha, rawWordVectors, vectorSize, fVector, 1, beta, cosineVec, 1)
-      val norms = wordVecNorms(rawWordVectors)
-      var i = 0
-      while (i < numWords) {
-        val norm = norms(i)
-        if (norm == 0.0f) {
-          cosineVec(i) = 0.0f
-        } else {
-          cosineVec(i) /= norm
-        }
-        i += 1
-      }
-
-      val pq = new BoundedPriorityQueue[(String, Float)](num + 1)(Ordering.by(_._2))
-
-      // wordList: Ordered list of words obtained from wordIndex.
-      val wordList: Array[String] = {
-        val (wl, _) = wordIndex.toSeq.sortBy(_._2).unzip
-        wl.toArray
-      }
-
-      var j = 0
-      while (j < numWords) {
-        pq += Tuple2(wordList(j), cosineVec(j))
-        j += 1
-      }
-
-      val scored = pq.toSeq.sortBy(-_._2)
-
-      val filtered = wordOpt match {
-        case Some(w) => scored.filter(tup => w != tup._1)
-        case None => scored
-      }
-
-      filtered
-        .take(num)
-        .map { case (word, score) => (word, score.toDouble) }
-        .toArray
-    }
+    filtered
+      .take(num)
+      .map { case (word, score) => (word, score.toDouble) }
+      .toArray
   }
 }
 

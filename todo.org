@@ -1,0 +1,8 @@
+1. Add similar(word1,word2) function to FastTextModel
+2. Update readme with code examples
+3. Make a integration test script for running FastText with a sample dataset and then verify assertions
+4. Setup travisCI
+6. Write more unit tests, take some unit tests from official Spark Word2Vec implementation
+7. Setup a Jupyter notebook for parsing the trained vectors and doing plots etc.
+8. Publish to MavenCentral
+9. Publish as a spark package

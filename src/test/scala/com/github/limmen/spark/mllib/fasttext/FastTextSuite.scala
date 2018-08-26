@@ -1,10 +1,29 @@
 package com.github.limmen.spark.mllib.fasttext
 
 import com.github.fommil.netlib.BLAS.{ getInstance => blas }
+import org.apache.spark.sql.SparkSession
 import org.scalatest.PrivateMethodTester._
 import org.scalatest._
 
-class FastTextSuite extends FunSuite with Matchers {
+class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
+
+  private var spark: SparkSession = _
+
+  override protected def beforeAll(): Unit = {
+    super.beforeAll()
+    spark = SparkSession.builder()
+      .master("local[2]")
+      .appName("FastTextSuite")
+      .getOrCreate()
+  }
+
+  override protected def afterAll(): Unit = {
+    try {
+      spark.sparkContext.stop()
+    } finally {
+      super.afterAll()
+    }
+  }
 
   //Test case for the scenario mentioned in the paper
   test("computeSubWords") {
@@ -28,4 +47,24 @@ class FastTextSuite extends FunSuite with Matchers {
     subwords.foreach(h => assert(truthLabelsHash.contains(h)))
   }
 
+  test("findSynonyms") {
+    val sentence = "a b " * 100 + "a c " * 10
+    val localDoc = Seq(sentence, sentence)
+    val doc = spark.sparkContext.parallelize(localDoc).map(line => line.split(" ").toSeq)
+    val model = new FastText().setVectorSize(10).setSeed(42L).fit(doc)
+    val syms = model.findSynonyms("a", 2)
+    assert(syms.length == 2)
+    assert(syms(0)._1 == "b")
+    assert(syms(1)._1 == "c")
+  }
+
+  test("FastText throws exception when vocabulary is empty") {
+    intercept[IllegalArgumentException] {
+      val sentence = "a b c"
+      val localDoc = Seq(sentence, sentence)
+      val doc = spark.sparkContext.parallelize(localDoc)
+        .map(line => line.split(" ").toSeq)
+      new FastText().setMinCount(10).fit(doc)
+    }
+  }
 }
