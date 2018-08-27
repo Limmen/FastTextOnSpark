@@ -107,12 +107,12 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
     val vectorSize = 4
     val vocab = new FastText().setVectorSize(vectorSize).setSeed(42L).setMinn(3).setMaxn(3).setBucket(bucket).setMinCount(1).fit(doc).vocab
     val vocabSize = vocab.size
-    println(s"vocabSize: ${vocab.size}")
     val wordVectors = FastTextModel.buildWordVectors(wordsModelTest, subwordsModelTest, vocab, bucket)
-    assert(wordVectors.slice(0, vectorSize).sameElements(wordsModelTest("china")))
-    assert(wordVectors.slice(vectorSize, 2 * vectorSize).sameElements(wordsModelTest("japan")))
-    assert(wordVectors.slice(2 * vectorSize, 3 * vectorSize).sameElements(wordsModelTest("taiwan")))
-    assert(wordVectors.slice(3 * vectorSize, 4 * vectorSize).sameElements(wordsModelTest("korea")))
+    val invertedIndex = vocab.map((w) => w.word).zipWithIndex.toMap.map(_.swap) //get index (idx -> word)
+    assert(wordVectors.slice(0, vectorSize).sameElements(wordsModelTest(invertedIndex(0))))
+    assert(wordVectors.slice(vectorSize, 2 * vectorSize).sameElements(wordsModelTest(invertedIndex(1))))
+    assert(wordVectors.slice(2 * vectorSize, 3 * vectorSize).sameElements(wordsModelTest(invertedIndex(2))))
+    assert(wordVectors.slice(3 * vectorSize, 4 * vectorSize).sameElements(wordsModelTest(invertedIndex(3))))
 
     var hash = (vocabSize + (FastText.hash("<ch") mod bucket).intValue)
     assert(wordVectors.slice(hash * vectorSize, hash * vectorSize + vectorSize).sameElements(subwordsModelTest("<ch")))
@@ -246,7 +246,6 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
     val vocabSize2 = 2
     val norm2 = FastTextModel.wordVecNorms(testVector2, vocabSize2, vectorSize1, bucket1)
     val normalizedVector2 = FastTextModel.normalizeVecs(testVector2, norm2, vocabSize2, vectorSize1, bucket1)
-    normalizedVector2.foreach(println)
     assert(normalizedVector2.length == testVector2.length)
     assert(normalizedVector2.sameElements(Array(
       0.20689654f, -0.06896552f, 0.3103448f, 0.4137931f, -0.8275862f,
@@ -267,8 +266,51 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
     assert(model.transform("korea").toArray.sameElements(wordsModelTest("korea")))
   }
 
+  test("averageSubwords") {
+    val sentence = "china japan taiwan korea"
+    val localDoc = Seq(sentence, sentence)
+    val doc = spark.sparkContext.parallelize(localDoc).map(line => line.split(" ").toSeq)
+    val bucket = 1000
+    val vectorSize = 4
+    val vocab = new FastText().setVectorSize(vectorSize).setSeed(42L).setMinn(3).setMaxn(3).setBucket(bucket).setMinCount(1).fit(doc).vocab
+    val model = new FastTextModel(wordsModelTest, subwordsModelTest, vocab, bucket)
+    var index = -1
+    var j = 0
+    while (j < vocab.length) {
+      if (vocab(j).word.equals("china"))
+        index = j
+      j += 1
+    }
+    val (w, wordVector) = model.averageSubWords("china", index, model.wordVectors)
+    assert(w.equals("china"))
+    var subwords = wordsModelTest("china")
+    subwordsModelTest.filter((tuple) =>
+      tuple._1.equals("<ch") ||
+        tuple._1.equals("chi") ||
+        tuple._1.equals("hin") ||
+        tuple._1.equals("ina") ||
+        tuple._1.equals("na>")).values.toArray.foreach((vec) => subwords = subwords ++ vec)
+    val numberOfSubWords = Array("china", "<ch", "chi", "hin", "ina", "na>").length
+    assert(subwords.length == numberOfSubWords * vectorSize)
+    var magicTruthVec = Array.fill[Float](vectorSize)(0f)
+    var i = 0
+    while (i < numberOfSubWords) {
+      blas.saxpy(vectorSize, 1.0f, subwords, i * vectorSize, 1, magicTruthVec, 0, 1)
+      i += 1
+    }
+    val scalar = (1.0f / numberOfSubWords)
+    blas.sscal(vectorSize, scalar, magicTruthVec, 1)
+    assert(magicTruthVec.sameElements(wordVector))
+  }
   //  test("getVectors") {
-  //    ???
+  //    val sentence = "china japan taiwan korea"
+  //    val localDoc = Seq(sentence, sentence)
+  //    val doc = spark.sparkContext.parallelize(localDoc).map(line => line.split(" ").toSeq)
+  //    val bucket = 1000
+  //    val vectorSize = 4
+  //    val vocab = new FastText().setVectorSize(vectorSize).setSeed(42L).setMinn(3).setMaxn(3).setBucket(bucket).setMinCount(1).fit(doc).vocab
+  //    val model = new FastTextModel(wordsModelTest, subwordsModelTest, vocab, bucket)
+  //    val vectors = model.getVectors(norm=false)
   //  }
   //
   //
@@ -276,4 +318,10 @@ class FastTextSuite extends FunSuite with Matchers with BeforeAndAfterAll {
   //  test("window size") {
   //    ???
   //  }
+
+//  test("vocabulary"){
+//  }
+
+//  test("minCount"){
+//  }
 }

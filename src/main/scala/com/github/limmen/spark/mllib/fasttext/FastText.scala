@@ -318,7 +318,6 @@ class FastText extends Serializable {
   private def learnVocab[S <: Iterable[String]](dataset: RDD[S]): Unit = {
     //Flatten list of sentences into list of words
     val words = dataset.flatMap(x => x)
-
     //Compute vocabulary by counting occurences of words and filtering based on minCount
     //Furthermore, each word is transformed into its VocabWord format with dummy entries for
     //the huffman codes since the tree is not computed yet. Sort by count.
@@ -347,7 +346,6 @@ class FastText extends Serializable {
       trainWordsCount += vocab(a).cn
       a += 1
     }
-    LogHolderFT.log.info(s"vocabSize = $vocabSize, trainWordsCount = $trainWordsCount, vocabWithNgrams size: ${vocabSize + bucket}")
   }
 
   /**
@@ -913,7 +911,7 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
    * @param bucket the number of buckets used for hashing n-grams (optimization for FastText)
    */
   def this(wordsModel: Map[String, Array[Float]], subwordsModel: Map[String, Array[Float]], vocab: Array[FTVocabWord], bucket: Int) = {
-    this(FastTextModel.buildWordIndex(wordsModel), FastTextModel.buildWordVectors(wordsModel, subwordsModel, vocab, bucket), vocab, bucket)
+    this(FastTextModel.buildWordIndex(vocab), FastTextModel.buildWordVectors(wordsModel, subwordsModel, vocab, bucket), vocab, bucket)
   }
 
   /**
@@ -1097,17 +1095,17 @@ class FastTextModel(val wordIndex: Map[String, Int], val wordVectors: Array[Floa
 object FastTextModel {
 
   /**
-   * Builds an index (word --> index) from a model of (word --> wordVector)
+   * Builds an index (word --> index) from a vocabulary
    *
-   * @param wordsModel a map of of (word --> wordVector)
+   * @param vocab the vocabulary words with their counts, huffman codes etc
    * @return a map of (word --> index)
    */
-  def buildWordIndex(wordsModel: Map[String, Array[Float]]): Map[String, Int] = {
-    wordsModel.keys.zipWithIndex.toMap
+  def buildWordIndex(vocab: Array[FTVocabWord]): Map[String, Int] = {
+    vocab.map((w) => w.word).zipWithIndex.toMap
   }
 
   /**
-   * Builds a flattened array of word and subwords vectors from maps of (word --> vector) and (subword --> vector)
+   * Builds a flattened array of word and subwords vectors from maps of (word --> vector), (subword --> vector) and a vocabulary
    *
    * @param wordsModel a map of of (word --> wordVector)
    * @param subwordsModel a map of of (subword --> subwordVector)
@@ -1119,13 +1117,13 @@ object FastTextModel {
     require(wordsModel.nonEmpty, "FastTextMap should be non-empty")
     val vocabSize = vocab.size
     val vectorSize = wordsModel.head._2.length
-    val wordList = wordsModel.keys.toArray
+    val invertedIndex = vocab.map((w) => w.word).zipWithIndex.toMap.map(_.swap) //get index of (idx --> word)
     //A flattened vector of all word and subword vectors initialization
     val wordVectors = Array.fill[Float]((vocabSize + bucket) * vectorSize)((Random.nextFloat() - 0.5f) / vectorSize)
     var i = 0
     //Copy in the word vectors in the flattened vectors array
     while (i < vocabSize) {
-      Array.copy(wordsModel(wordList(i)), 0, wordVectors, i * vectorSize, vectorSize)
+      Array.copy(wordsModel(invertedIndex(i)), 0, wordVectors, i * vectorSize, vectorSize)
       i += 1
     }
     val subWordsHashModel = subwordsModel.map { case (ngram, vector) => (vocabSize + (FastText.hash(ngram) mod bucket).intValue, vector) }
